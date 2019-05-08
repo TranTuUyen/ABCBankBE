@@ -215,3 +215,6 @@ fabric.properties
 
 # All idea stuff:
 .idea/*
+tcl/tcl8.5/
+tcl/tk8.5/
+note.txt
