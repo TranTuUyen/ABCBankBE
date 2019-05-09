@@ -1,9 +1,7 @@
 """This module will serve the api request."""
-import os
-import datetime
-
+from flask import jsonify
+import pymongo
 import flask_bcrypt
-
 from config import client
 from app import app
 from bson.objectid import ObjectId
@@ -15,8 +13,8 @@ import unidecode
 import json
 import ast
 import imp
-import logging
-from account import validate_user
+
+ITEM_PER_PAGE = 20
 
 # Import the helpers module
 helper_module = imp.load_source('*', './app/helpers.py')
@@ -28,6 +26,17 @@ db = client.ABCBankDatabase
 # Select the collection
 collection = db.account
 
+# Setting text search
+# collection.ensure_index([
+#       ('firstname', 'text'),
+#       ('lastname', 'text'),
+#   ],
+#   name="search_index",
+#   weights={
+#       'title': 100,
+#       'body': 100
+#   }
+# )
 
 @app.route("/")
 def get_initial_response():
@@ -45,193 +54,211 @@ def get_initial_response():
 
 @app.route('/api/v1/login', methods=['POST'])
 def login():
-    if not request.is_json:
-        return jsonify({"msg": "Missing JSON in request"}), 400
-    data = request.get_json()
-    email = request.json.get('email', None)
-    password = request.json.get('password', None)
-    if not email:
-        return jsonify({"msg": "Missing username parameter"}), 400
-    if not password:
-        return jsonify({"msg": "Missing password parameter"}), 400
-    user = collection.find_one({'email': email})
-    v = 3
-    b = user[password]
-    a = user
-    if user and flask_bcrypt.check_password_hash(user['password'], password):
+    try:
+        if not request.is_json:
+            return jsonify({"msg": "Missing JSON in request"}), 400
+        email = request.json.get('email', None)
+        password = request.json.get('password', None)
+        if not email:
+            return jsonify({"msg": "Missing username parameter"}), 400
+        if not password:
+            return jsonify({"msg": "Missing password parameter"}), 400
+        user = collection.find_one({'email': email})
+        if not user:
+            return "Account is not exist", 401
+        userpw_hash = flask_bcrypt.generate_password_hash(user['password']).decode('utf-8')
+        pw_match = flask_bcrypt.check_password_hash(userpw_hash, password)
+        if not pw_match:
+            return "Password does not match", 401
         del user['password']
-        access_token = create_access_token(identity=data)
-        refresh_token = create_refresh_token(identity=data)
+        access_token = create_access_token(identity=email)
+        refresh_token = create_refresh_token(identity=email)
         user['token'] = access_token
         user['refresh'] = refresh_token
-        return jsonify({'ok': True, 'data': user}), 200
-
-    # Identity can be any data that is json serializable
-    access_token = create_access_token(identity=email)
-    return jsonify(access_token=access_token), 200
-
-
-# Protect a view with jwt_required, which requires a valid access token
-# in the request to access.
-@app.route('/protected', methods=['GET'])
-@jwt_required
-def protected():
-    # Access the identity of the current user with get_jwt_identity
-    current_user = get_jwt_identity()
-    return jsonify(logged_in_as=current_user), 200
+        page_sanitized = json.loads(dumps(user))
+        return jsonify({'ok': True, 'data': page_sanitized}), 200
+    except Exception, e:
+        return e, 401
 
 @app.route("/api/v1/accounts", methods=['POST'])
+@jwt_required
 def create_account():
     """
        Function to create new accounts.
        """
-    try:
-        # Create new accounts
-        try:
-            body = ast.literal_eval(json.dumps(request.get_json()))
-        except:
-            # Bad request as request body is not available
-            # Add message for debugging purpose
-            return "", 400
+    current_user = get_jwt_identity()
+    if current_user:
+        found_account = collection.find_one({'email': current_user})
+    if found_account:
+        if found_account["role"] == "admin":
+            try:
+                # Create new accounts
+                try:
+                    body = ast.literal_eval(json.dumps(request.get_json()))
+                except:
+                    # Bad request as request body is not available
+                    # Add message for debugging purpose
+                    return "No request body", 400
 
-        record_created = collection.insert(body)
+                record_created = collection.insert(body)
 
-        # Prepare the response
-        if isinstance(record_created, list):
-            # Return list of Id of the newly created item
-            return jsonify([str(v) for v in record_created]), 201
+                # Prepare the response
+                if isinstance(record_created, list):
+                    # Return list of Id of the newly created item
+                    return jsonify([str(v) for v in record_created]), 201
+                else:
+                    # Return Id of the newly created item
+                    return jsonify(str(record_created)), 201
+            except:
+                # Error while trying to create the resource
+                # Add message for debugging purpose
+                return "Create account failed", 500
         else:
-            # Return Id of the newly created item
-            return jsonify(str(record_created)), 201
-    except:
-        # Error while trying to create the resource
-        # Add message for debugging purpose
-        return "", 500
+            return "You don't have permission to access this url", 403
 
 
 @app.route("/api/v1/accounts", methods=['GET'])
+@jwt_required
 def fetch_accounts():
     """
        Function to fetch the accounts.
        """
-    try:
-        # Call the function to get the query params
-        query_params = helper_module.parse_query_params(request.query_string)
-        # Check if dictionary is not empty
-        if query_params:
+    current_user = get_jwt_identity()
+    if current_user:
 
-            # Try to convert the value to int
-            query = {k: int(v) if isinstance(v, str) and v.isdigit() else v for k, v in query_params.items()}
+        try:
+            # Call the function to get the query params
+            query_params = json.loads(request.data)
+            # Check if dictionary is not empty
+            if query_params:
+                page_num = query_params["page_num"]
+                # Check if the records are found
+                if page_num:
+                    # Prepare the response
+                    fetched_accounts = collection.find().limit(ITEM_PER_PAGE).skip(ITEM_PER_PAGE * page_num)
+                    return dumps(fetched_accounts)
+                else:
+                    # No records are found
+                    return "No accounts exist", 404
 
-            # Fetch all the record(s)
-            records_fetched = collection.find(query)
-
-            # Check if the records are found
-            if records_fetched.count() > 0:
-                # Prepare the response
-                return dumps(records_fetched)
+            # If dictionary is empty
             else:
-                # No records are found
-                return "", 404
-
-        # If dictionary is empty
-        else:
-            # Return all the records as query string parameters are not available
-            if collection.find().count > 0:
-                # Prepare response if the accounts are found
-                return dumps(collection.find())
-            else:
-                # Return empty array if no accounts are found
-                return jsonify([])
-    except:
-        # Error while trying to fetch the resource
-        # Add message for debugging purpose
-        return "", 500
+                # Return all the records as query string parameters are not available
+                fetched_accounts = collection.find().limit(20)
+                if fetched_accounts.count > 0:
+                    # Prepare response if the accounts are found
+                    return dumps(fetched_accounts)
+                else:
+                    # Return empty array if no accounts are found
+                    return jsonify([])
+        except Exception, e:
+            # Error while trying to fetch the resource
+            # Add message for debugging purpose
+            return "", 500
 
 @app.route("/api/v1/accounts/<account_id>", methods=['GET'])
+@jwt_required
 def fetch_account(account_id):
     """
        Function to fetch the account.
        """
-    try:
-        # Decode account_id
-        account_id = unidecode.unidecode(account_id)
-        found_account = collection.find_one({'_id': ObjectId(account_id)})
-        if found_account:
-            # Prepare response if the accounts are found
-            return dumps(found_account)
-        else:
-            return "", 400
+    current_user = get_jwt_identity()
+    if current_user:
+        try:
+            # Decode account_id
+            account_id = unidecode.unidecode(account_id)
+            found_account = collection.find_one({'_id': ObjectId(account_id)})
+            if found_account:
+                # Prepare response if the accounts are found
+                return dumps(found_account)
+            else:
+                return "Account does not exist", 400
 
-    except Exception, e:
-        # Error while trying to fetch the resource
-        # Add message for debugging purpose
-        return "", 500
+        except Exception, e:
+            # Error while trying to fetch the resource
+            # Add message for debugging purpose
+            return "Get account failed", 500
 
 @app.route("/api/v1/accounts/<account_id>", methods=['POST'])
+@jwt_required
 def update_account(account_id):
     """
        Function to update the account.
        """
-    try:
-        # Get the value which needs to be updated
-        try:
-            body = ast.literal_eval(json.dumps(request.get_json()))
-        except:
-            # Bad request as the request body is not available
-            # Add message for debugging purpose
-            return "", 400
+    current_user = get_jwt_identity()
+    if current_user:
+        found_account = collection.find_one({'email': current_user})
+    if found_account:
+        if found_account["role"] == "admin":
+            try:
+                # Get the value which needs to be updated
+                try:
+                    body = ast.literal_eval(json.dumps(request.get_json()))
+                except:
+                    # Bad request as the request body is not available
+                    # Add message for debugging purpose
+                    return "No update data", 400
 
-        # Decode account_id
-        account_id = unidecode.unidecode(account_id)
+                # Decode account_id
+                account_id = unidecode.unidecode(account_id)
 
-        # Updating the account
-        records_updated = collection.update_one({'_id': ObjectId(account_id)}, {"$set": body})
+                # Updating the account
+                records_updated = collection.update_one({'_id': ObjectId(account_id)}, {"$set": body})
 
-        # Check if resource is updated
-        if records_updated.modified_count > 0:
-            # Prepare the response as resource is updated successfully
-            return "", 200
-        else:
-            # Bad request as the resource is not available to update
-            # Add message for debugging purpose
-            return "", 404
-    except:
-        # Error while trying to update the resource
-        # Add message for debugging purpose
-        return "", 500
+                # Check if resource is updated
+                if records_updated.modified_count > 0:
+                    # Prepare the response as resource is updated successfully
+                    return "Update account successfully", 200
+                else:
+                    # Bad request as the resource is not available to update
+                    # Add message for debugging purpose
+                    return "Account is not available t update", 404
+            except:
+                # Error while trying to update the resource
+                # Add message for debugging purpose
+                return "Update failed", 500
 
 
 @app.route("/api/v1/accounts/<account_id>", methods=['DELETE'])
+@jwt_required
 def remove_account(account_id):
     """
        Function to remove the account.
        """
-    try:
-        # Decode account_id
-        account_id = unidecode.unidecode(account_id)
+    current_user = get_jwt_identity()
+    if current_user:
+        found_account = collection.find_one({'email': current_user})
+    if found_account:
+        if found_account["role"] == "admin":
+            try:
+                # Decode account_id
+                account_id = unidecode.unidecode(account_id)
 
-        # Delete the account
-        delete_account = collection.delete_one({'_id': ObjectId(account_id)})
+                # Delete the account
+                delete_account = collection.delete_one({'_id': ObjectId(account_id)})
 
-        if delete_account.deleted_count > 0 :
-            # Prepare the response
-            return "", 204
-        else:
-            # Resource Not found
-            return "", 404
-    except:
-        # Error while trying to delete the resource
-        # Add message for debugging purpose
-        return "", 500
+                if delete_account.deleted_count > 0 :
+                    # Prepare the response
+                    return "Delete successfully", 204
+                else:
+                    # Resource Not found
+                    return "Accunt not found", 404
+            except:
+                # Error while trying to delete the resource
+                # Add message for debugging purpose
+                return "Delete failed", 500
 
-@app.route('/api/v1/accounts/search')
+@app.route('/api/v1/accounts/search', methods=['GET'])
 def search():
-    query = request.form['q']
-    text_results = db.command('text', 'firstname', search=query, limit=20)
-    doc_matches = (res['obj'] for res in text_results['results'])
-    # return render_template("search.html", results=results)
-    return text_results
+    try:
+        text_data = request.get_json()
+        text = text_data["text"]
+        collection.drop_indexes()
+        collection.create_index([("$**", pymongo.TEXT)])
+        text_results = collection.find({"$text": {"$search": "\"" + text + "\""}})
+        return dumps(text_results)
+    except Exception, e:
+        return e, 500
 
 @app.errorhandler(404)
 def page_not_found(e):
