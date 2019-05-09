@@ -22,21 +22,9 @@ helper_module = imp.load_source('*', './app/helpers.py')
 
 
 # Select the database
-db = client.ABCBankDatabase
+db = client.get_database("abcbankportal")
 # Select the collection
 collection = db.account
-
-# Setting text search
-# collection.ensure_index([
-#       ('firstname', 'text'),
-#       ('lastname', 'text'),
-#   ],
-#   name="search_index",
-#   weights={
-#       'title': 100,
-#       'body': 100
-#   }
-# )
 
 @app.route("/")
 def get_initial_response():
@@ -79,6 +67,48 @@ def login():
         return jsonify({'ok': True, 'data': page_sanitized}), 200
     except Exception, e:
         return e, 401
+
+@app.route("/api/v1/accounts/check_account_number", methods=['POST'])
+@jwt_required
+def check_account_number():
+    """
+       Function to check existed account_number
+       """
+    current_user = get_jwt_identity()
+    if current_user:
+        found_account = collection.find_one({'email': current_user})
+    if found_account:
+        body = ast.literal_eval(json.dumps(request.get_json()))
+        account_number = body['account_number']
+        try:
+            existed_account = collection.find_one({'account_number': int(account_number)})
+            if existed_account:
+                return "Account number has existed already", 409
+            else:
+                return "Account number is valid", 200
+        except Exception, e:
+            return e, 500
+
+@app.route("/api/v1/accounts/check_email", methods=['POST'])
+@jwt_required
+def check_email():
+    """
+       Function to check existed email
+       """
+    current_user = get_jwt_identity()
+    if current_user:
+        found_account = collection.find_one({'email': current_user})
+    if found_account:
+        body = ast.literal_eval(json.dumps(request.get_json()))
+        email = body['email']
+        try:
+            existed_account = collection.find_one({'email': email})
+            if existed_account:
+                return "Email has existed already", 409
+            else:
+                return "Email is valid", 200
+        except Exception, e:
+            return e, 500
 
 @app.route("/api/v1/accounts", methods=['POST'])
 @jwt_required
@@ -255,7 +285,7 @@ def search():
         text = text_data["text"]
         collection.drop_indexes()
         collection.create_index([("$**", pymongo.TEXT)])
-        text_results = collection.find({"$text": {"$search": "\"" + text + "\""}})
+        text_results = collection.find({"$text": {"$search": "\"" + text + "\""}}).sort([("email",pymongo.ASCENDING),("firstname", pymongo.ASCENDING),("lastname", pymongo.ASCENDING) ])
         return dumps(text_results)
     except Exception, e:
         return e, 500
