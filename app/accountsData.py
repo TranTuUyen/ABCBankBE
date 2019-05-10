@@ -1,5 +1,4 @@
 """This module will serve the api request."""
-from flask import jsonify
 import pymongo
 import flask_bcrypt
 from config import client
@@ -17,7 +16,7 @@ import imp
 ITEM_PER_PAGE = 20
 
 # Import the helpers module
-helper_module = imp.load_source('*', './app/helpers.py')
+# helper_module = imp.load_source('*', './app/helpers.py')
 
 
 
@@ -53,11 +52,11 @@ def login():
             return jsonify({"msg": "Missing password parameter"}), 400
         user = collection.find_one({'email': email})
         if not user:
-            return "Account is not exist", 401
-        userpw_hash = flask_bcrypt.generate_password_hash(user['password']).decode('utf-8')
-        pw_match = flask_bcrypt.check_password_hash(userpw_hash, password)
+            return "Account does not exist", 400
+        # userpw_hash = flask_bcrypt.generate_password_hash(user['password']).decode('utf-8')
+        pw_match = flask_bcrypt.check_password_hash(user['password'], password)
         if not pw_match:
-            return "Password does not match", 401
+            return "Password is wrong", 400
         del user['password']
         access_token = create_access_token(identity=email)
         refresh_token = create_refresh_token(identity=email)
@@ -120,15 +119,19 @@ def create_account():
     if current_user:
         found_account = collection.find_one({'email': current_user})
     if found_account:
-        if found_account["role"] == "admin":
+        # if found_account["role"] == "admin":
             try:
                 # Create new accounts
                 try:
                     body = ast.literal_eval(json.dumps(request.get_json()))
-                except:
+
+                    for account in body:
+                        password_encode = flask_bcrypt.generate_password_hash(account['password']).decode('utf-8')
+                        account['password'] = password_encode
+                except Exception, e:
                     # Bad request as request body is not available
                     # Add message for debugging purpose
-                    return "No request body", 400
+                    return e, 400
 
                 record_created = collection.insert(body)
 
@@ -143,8 +146,8 @@ def create_account():
                 # Error while trying to create the resource
                 # Add message for debugging purpose
                 return "Create account failed", 500
-        else:
-            return "You don't have permission to access this url", 403
+        # else:
+        #     return "You don't have permission to access this url", 403
 
 
 @app.route("/api/v1/accounts", methods=['GET'])
@@ -158,6 +161,8 @@ def fetch_accounts():
 
         try:
             # Call the function to get the query params
+            if not request.data:
+                request.data = "{}"
             query_params = json.loads(request.data)
             # Check if dictionary is not empty
             if query_params:
@@ -165,7 +170,10 @@ def fetch_accounts():
                 # Check if the records are found
                 if page_num:
                     # Prepare the response
-                    fetched_accounts = collection.find().limit(ITEM_PER_PAGE).skip(ITEM_PER_PAGE * page_num)
+                    fetched_accounts = collection.find() \
+                        .sort([("account_number", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING),
+                               ("firstname", pymongo.ASCENDING),  ("age", pymongo.ASCENDING),])\
+                        .limit(ITEM_PER_PAGE)
                     return dumps(fetched_accounts)
                 else:
                     # No records are found
@@ -174,7 +182,10 @@ def fetch_accounts():
             # If dictionary is empty
             else:
                 # Return all the records as query string parameters are not available
-                fetched_accounts = collection.find().limit(20)
+                fetched_accounts = collection.find() \
+                    .sort([("account_number", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING),
+                           ("firstname", pymongo.ASCENDING), ("age", pymongo.ASCENDING) ]) \
+                    .limit(ITEM_PER_PAGE)
                 if fetched_accounts.count > 0:
                     # Prepare response if the accounts are found
                     return dumps(fetched_accounts)
@@ -281,11 +292,14 @@ def remove_account(account_id):
 @app.route('/api/v1/accounts/search', methods=['GET'])
 def search():
     try:
-        text_data = request.get_json()
-        text = text_data["text"]
+        search_data = request.get_json()
+        text = search_data["text"]
+        page_num = search_data['page_num'] - 1
         collection.drop_indexes()
         collection.create_index([("$**", pymongo.TEXT)])
-        text_results = collection.find({"$text": {"$search": "\"" + text + "\""}}).sort([("email",pymongo.ASCENDING),("firstname", pymongo.ASCENDING),("lastname", pymongo.ASCENDING) ])
+        text_results = collection.find({"$text": {"$search": "\"" + text + "\""}})\
+            .sort([("email",pymongo.ASCENDING),("firstname", pymongo.ASCENDING),("lastname", pymongo.ASCENDING)])\
+            .limit(ITEM_PER_PAGE).skip(ITEM_PER_PAGE * page_num)
         return dumps(text_results)
     except Exception, e:
         return e, 500
