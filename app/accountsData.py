@@ -52,11 +52,11 @@ def login():
             return jsonify({"msg": "Missing password parameter"}), 400
         user = collection.find_one({'email': email})
         if not user:
-            return "Account does not exist", 400
+            return jsonify({'ok': False, 'message': "Account does not exist"}), 400
         # userpw_hash = flask_bcrypt.generate_password_hash(user['password']).decode('utf-8')
         pw_match = flask_bcrypt.check_password_hash(user['password'], password)
         if not pw_match:
-            return "Password is wrong", 400
+            return jsonify({'ok': False, 'message': "Password is wrong"}), 400
         del user['password']
         access_token = create_access_token(identity=email)
         refresh_token = create_refresh_token(identity=email)
@@ -84,9 +84,10 @@ def check_account_number():
             if existed_account:
                 return "Account number has existed already", 409
             else:
-                return "Account number is valid", 200
+                return jsonify({'ok': True, 'message': "Account number is valid"}), 200
         except Exception, e:
             return e, 500
+    return jsonify({'ok': False, 'message': "Can not check account number"}), 500
 
 @app.route("/api/v1/accounts/check_email", methods=['POST'])
 @jwt_required
@@ -105,9 +106,10 @@ def check_email():
             if existed_account:
                 return "Email has existed already", 409
             else:
-                return "Email is valid", 200
+                return jsonify({'ok': True, 'message': "Email is valid"}), 200
         except Exception, e:
             return e, 500
+    return jsonify({'ok': False, 'message': "Can not check email"}), 500
 
 @app.route("/api/v1/accounts", methods=['POST'])
 @jwt_required
@@ -125,9 +127,8 @@ def create_account():
                 try:
                     body = ast.literal_eval(json.dumps(request.get_json()))
 
-                    for account in body:
-                        password_encode = flask_bcrypt.generate_password_hash(account['password']).decode('utf-8')
-                        account['password'] = password_encode
+                    password_encode = flask_bcrypt.generate_password_hash(body['password']).decode('utf-8')
+                    body['password'] = password_encode
                 except Exception, e:
                     # Bad request as request body is not available
                     # Add message for debugging purpose
@@ -145,7 +146,10 @@ def create_account():
             except:
                 # Error while trying to create the resource
                 # Add message for debugging purpose
-                return "Create account failed", 500
+                return jsonify({'ok': True, 'message': "Create account failed"}), 500
+
+    return jsonify({'ok': False, 'message': "Create account failed"}), 500
+
         # else:
         #     return "You don't have permission to access this url", 403
 
@@ -186,6 +190,7 @@ def fetch_accounts():
                     .sort([("account_number", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING),
                            ("firstname", pymongo.ASCENDING), ("age", pymongo.ASCENDING) ]) \
                     .limit(ITEM_PER_PAGE)
+                documentCount = collection.count
                 if fetched_accounts.count > 0:
                     # Prepare response if the accounts are found
                     return dumps(fetched_accounts)
@@ -230,7 +235,7 @@ def update_account(account_id):
     if current_user:
         found_account = collection.find_one({'email': current_user})
     if found_account:
-        if found_account["role"] == "admin":
+        if found_account["role"] == "normal":
             try:
                 # Get the value which needs to be updated
                 try:
@@ -249,15 +254,16 @@ def update_account(account_id):
                 # Check if resource is updated
                 if records_updated.modified_count > 0:
                     # Prepare the response as resource is updated successfully
-                    return "Update account successfully", 200
+                    return jsonify({'ok': True, 'message': "Update succesfully"}), 200
                 else:
                     # Bad request as the resource is not available to update
                     # Add message for debugging purpose
                     return "Account is not available t update", 404
-            except:
+            except Exception, e:
                 # Error while trying to update the resource
                 # Add message for debugging purpose
                 return "Update failed", 500
+    return jsonify({'ok': True, 'message': "Update succesfully"}), 200
 
 
 @app.route("/api/v1/accounts/<account_id>", methods=['DELETE'])
@@ -270,11 +276,9 @@ def remove_account(account_id):
     if current_user:
         found_account = collection.find_one({'email': current_user})
     if found_account:
-        if found_account["role"] == "admin":
+        if found_account["role"] == "Admin":
             try:
                 # Decode account_id
-                account_id = unidecode.unidecode(account_id)
-
                 # Delete the account
                 delete_account = collection.delete_one({'_id': ObjectId(account_id)})
 
@@ -288,7 +292,7 @@ def remove_account(account_id):
                 # Error while trying to delete the resource
                 # Add message for debugging purpose
                 return "Delete failed", 500
-
+    return "Delete failed", 500
 @app.route('/api/v1/accounts/search', methods=['GET'])
 def search():
     try:
