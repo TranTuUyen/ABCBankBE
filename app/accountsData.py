@@ -1,4 +1,6 @@
 """This module will serve the api request."""
+import datetime
+
 import pymongo
 import flask_bcrypt
 from config import client
@@ -6,12 +8,19 @@ from app import app
 from bson.objectid import ObjectId
 from bson.json_util import dumps
 from flask import request, jsonify
-from flask_jwt_extended import (create_access_token, create_refresh_token,
-                                jwt_required, jwt_refresh_token_required, get_jwt_identity)
+from flask_jwt_extended import (
+    jwt_required, get_jwt_identity,
+    create_access_token, create_refresh_token,
+    jwt_refresh_token_required, get_raw_jwt
+)
 import unidecode
 import json
 import ast
-import imp
+
+role = {
+    'admin': 'Admin',
+    'normal': "Normal"
+}
 
 ITEM_PER_PAGE = 20
 
@@ -19,25 +28,12 @@ ITEM_PER_PAGE = 20
 # helper_module = imp.load_source('*', './app/helpers.py')
 
 
-
 # Select the database
 db = client.get_database("abcbankportal")
 # Select the collection
 collection = db.account
+blacklist = set()
 
-@app.route("/")
-def get_initial_response():
-    """Welcome message for the API."""
-    # Message to the user
-    message = {
-        'apiVersion': 'v1.0',
-        'status': '200',
-        'message': 'Welcome to the Flask API'
-    }
-    # Making the message looks good
-    resp = jsonify(message)
-    # Returning the object
-    return resp
 
 @app.route('/api/v1/login', methods=['POST'])
 def login():
@@ -58,7 +54,8 @@ def login():
         if not pw_match:
             return jsonify({'ok': False, 'message': "Password is wrong"}), 400
         del user['password']
-        access_token = create_access_token(identity=email)
+        expires = datetime.timedelta(days=1)
+        access_token = create_access_token(identity=email, expires_delta=expires)
         refresh_token = create_refresh_token(identity=email)
         user['token'] = access_token
         user['refresh'] = refresh_token
@@ -67,9 +64,31 @@ def login():
     except Exception, e:
         return e, 401
 
+
+# Standard refresh endpoint. A blacklisted refresh token
+# will not be able to access this endpoint
+@app.route('/refresh', methods=['POST'])
+@jwt_refresh_token_required
+def refresh():
+    current_user = get_jwt_identity()
+    ret = {
+        'access_token': create_access_token(identity=current_user)
+    }
+    return jsonify(ret), 200
+
+
+# Endpoint for revoking the current users access token
+@app.route('/api/v1/logout', methods=['DELETE'])
+@jwt_required
+def logout():
+    jti = get_raw_jwt()['jti']
+    blacklist.add(jti)
+    return jsonify({"msg": "Successfully logged out"}), 200
+
+
 @app.route("/api/v1/accounts/check_account_number", methods=['POST'])
 @jwt_required
-def check_account_number():
+def checkExistedAccountNumber():
     """
        Function to check existed account_number
        """
@@ -89,9 +108,10 @@ def check_account_number():
             return e, 500
     return jsonify({'ok': False, 'message': "Can not check account number"}), 500
 
+
 @app.route("/api/v1/accounts/check_email", methods=['POST'])
 @jwt_required
-def check_email():
+def checkExistedEmail():
     """
        Function to check existed email
        """
@@ -111,9 +131,10 @@ def check_email():
             return e, 500
     return jsonify({'ok': False, 'message': "Can not check email"}), 500
 
+
 @app.route("/api/v1/accounts", methods=['POST'])
 @jwt_required
-def create_account():
+def createAccount():
     """
        Function to create new accounts.
        """
@@ -121,7 +142,7 @@ def create_account():
     if current_user:
         found_account = collection.find_one({'email': current_user})
     if found_account:
-        # if found_account["role"] == "admin":
+        if found_account["role"] == role['admin']:
             try:
                 # Create new accounts
                 try:
@@ -136,13 +157,7 @@ def create_account():
 
                 record_created = collection.insert(body)
 
-                # Prepare the response
-                if isinstance(record_created, list):
-                    # Return list of Id of the newly created item
-                    return jsonify([str(v) for v in record_created]), 201
-                else:
-                    # Return Id of the newly created item
-                    return jsonify(str(record_created)), 201
+                return jsonify(str(record_created)), 201
             except:
                 # Error while trying to create the resource
                 # Add message for debugging purpose
@@ -150,61 +165,38 @@ def create_account():
 
     return jsonify({'ok': False, 'message': "Create account failed"}), 500
 
-        # else:
-        #     return "You don't have permission to access this url", 403
+    # else:
+    #     return "You don't have permission to access this url", 403
 
 
 @app.route("/api/v1/accounts", methods=['GET'])
 @jwt_required
-def fetch_accounts():
+def getAllAccount():
     """
        Function to fetch the accounts.
        """
     current_user = get_jwt_identity()
     if current_user:
-
         try:
-            # Call the function to get the query params
-            if not request.data:
-                request.data = "{}"
-            query_params = json.loads(request.data)
-            # Check if dictionary is not empty
-            if query_params:
-                page_num = query_params["page_num"]
-                # Check if the records are found
-                if page_num:
-                    # Prepare the response
-                    fetched_accounts = collection.find() \
-                        .sort([("account_number", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING),
-                               ("firstname", pymongo.ASCENDING),  ("age", pymongo.ASCENDING),])\
-                        .limit(ITEM_PER_PAGE)
-                    return dumps(fetched_accounts)
-                else:
-                    # No records are found
-                    return "No accounts exist", 404
-
-            # If dictionary is empty
+            # Return all the records as query string parameters are not available
+            fetched_accounts = collection.find() \
+                .sort([("account_number", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING),
+                       ("firstname", pymongo.ASCENDING), ("age", pymongo.ASCENDING)])
+            if fetched_accounts.count > 0:
+                # Prepare response if the accounts are found
+                return dumps(fetched_accounts), 200
             else:
-                # Return all the records as query string parameters are not available
-                fetched_accounts = collection.find() \
-                    .sort([("account_number", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING),
-                           ("firstname", pymongo.ASCENDING), ("age", pymongo.ASCENDING) ]) \
-                    .limit(ITEM_PER_PAGE)
-                documentCount = collection.count
-                if fetched_accounts.count > 0:
-                    # Prepare response if the accounts are found
-                    return dumps(fetched_accounts)
-                else:
-                    # Return empty array if no accounts are found
-                    return jsonify([])
+                # Return empty array if no accounts are found
+                return jsonify([])
         except Exception, e:
             # Error while trying to fetch the resource
             # Add message for debugging purpose
-            return "", 500
+            return "Get account failed", 500
+
 
 @app.route("/api/v1/accounts/<account_id>", methods=['GET'])
 @jwt_required
-def fetch_account(account_id):
+def getAccount(account_id):
     """
        Function to fetch the account.
        """
@@ -216,18 +208,19 @@ def fetch_account(account_id):
             found_account = collection.find_one({'_id': ObjectId(account_id)})
             if found_account:
                 # Prepare response if the accounts are found
-                return dumps(found_account)
+                return dumps(found_account), 200
             else:
-                return "Account does not exist", 400
+                return "Account not found", 404
 
         except Exception, e:
             # Error while trying to fetch the resource
             # Add message for debugging purpose
             return "Get account failed", 500
 
+
 @app.route("/api/v1/accounts/<account_id>", methods=['POST'])
 @jwt_required
-def update_account(account_id):
+def updateAccount(account_id):
     """
        Function to update the account.
        """
@@ -235,7 +228,7 @@ def update_account(account_id):
     if current_user:
         found_account = collection.find_one({'email': current_user})
     if found_account:
-        if found_account["role"] == "normal":
+        if found_account["role"] ==  role['admin']:
             try:
                 # Get the value which needs to be updated
                 try:
@@ -254,11 +247,11 @@ def update_account(account_id):
                 # Check if resource is updated
                 if records_updated.modified_count > 0:
                     # Prepare the response as resource is updated successfully
-                    return jsonify({'ok': True, 'message': "Update succesfully"}), 200
+                    return jsonify({'ok': True, 'message': "Update successfully"}), 200
                 else:
                     # Bad request as the resource is not available to update
                     # Add message for debugging purpose
-                    return "Account is not available t update", 404
+                    return "Account is not available to update", 404
             except Exception, e:
                 # Error while trying to update the resource
                 # Add message for debugging purpose
@@ -268,7 +261,7 @@ def update_account(account_id):
 
 @app.route("/api/v1/accounts/<account_id>", methods=['DELETE'])
 @jwt_required
-def remove_account(account_id):
+def deleteAccount(account_id):
     """
        Function to remove the account.
        """
@@ -276,23 +269,26 @@ def remove_account(account_id):
     if current_user:
         found_account = collection.find_one({'email': current_user})
     if found_account:
-        if found_account["role"] == "Admin":
+        if found_account["role"] == role['admin']:
             try:
                 # Decode account_id
+                account_id = unidecode.unidecode(account_id)
                 # Delete the account
                 delete_account = collection.delete_one({'_id': ObjectId(account_id)})
 
-                if delete_account.deleted_count > 0 :
+                if delete_account.deleted_count > 0:
                     # Prepare the response
-                    return "Delete successfully", 204
+                    return jsonify({'ok': True, 'message': "Delete successfully"}), 200
                 else:
                     # Resource Not found
-                    return "Accunt not found", 404
+                    return "Account not found", 404
             except:
                 # Error while trying to delete the resource
                 # Add message for debugging purpose
                 return "Delete failed", 500
     return "Delete failed", 500
+
+
 @app.route('/api/v1/accounts/search', methods=['GET'])
 def search():
     try:
@@ -301,12 +297,13 @@ def search():
         page_num = search_data['page_num'] - 1
         collection.drop_indexes()
         collection.create_index([("$**", pymongo.TEXT)])
-        text_results = collection.find({"$text": {"$search": "\"" + text + "\""}})\
-            .sort([("email",pymongo.ASCENDING),("firstname", pymongo.ASCENDING),("lastname", pymongo.ASCENDING)])\
+        text_results = collection.find({"$text": {"$search": "\"" + text + "\""}}) \
+            .sort([("email", pymongo.ASCENDING), ("firstname", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING)]) \
             .limit(ITEM_PER_PAGE).skip(ITEM_PER_PAGE * page_num)
         return dumps(text_results)
     except Exception, e:
         return e, 500
+
 
 @app.errorhandler(404)
 def page_not_found(e):
