@@ -30,8 +30,9 @@ ITEM_PER_PAGE = 20
 
 # Select the database
 db = client.get_database("abcbankportal")
-# Select the collection
-collection = db.account
+# Select the accountCollection
+accountCollection = db.account
+userCollection = db.user
 blacklist = set()
 
 
@@ -46,7 +47,7 @@ def login():
             return jsonify({"msg": "Missing username parameter"}), 400
         if not password:
             return jsonify({"msg": "Missing password parameter"}), 400
-        user = collection.find_one({'email': email})
+        user = userCollection.find_one({'email': email})
         if not user:
             return jsonify({'ok': False, 'message': "Account does not exist"}), 400
         # userpw_hash = flask_bcrypt.generate_password_hash(user['password']).decode('utf-8')
@@ -94,12 +95,12 @@ def checkExistedAccountNumber():
        """
     current_user = get_jwt_identity()
     if current_user:
-        found_account = collection.find_one({'email': current_user})
-    if found_account:
+        found_user = userCollection.find_one({'email': current_user})
+    if found_user:
         body = ast.literal_eval(json.dumps(request.get_json()))
         account_number = body['account_number']
         try:
-            existed_account = collection.find_one({'account_number': int(account_number)})
+            existed_account = accountCollection.find_one({'account_number': int(account_number)})
             if existed_account:
                 return "Account number has existed already", 409
             else:
@@ -117,12 +118,12 @@ def checkExistedEmail():
        """
     current_user = get_jwt_identity()
     if current_user:
-        found_account = collection.find_one({'email': current_user})
-    if found_account:
+        found_user = userCollection.find_one({'email': current_user})
+    if found_user:
         body = ast.literal_eval(json.dumps(request.get_json()))
         email = body['email']
         try:
-            existed_account = collection.find_one({'email': email})
+            existed_account = accountCollection.find_one({'email': email})
             if existed_account:
                 return "Email has existed already", 409
             else:
@@ -140,9 +141,9 @@ def createAccount():
        """
     current_user = get_jwt_identity()
     if current_user:
-        found_account = collection.find_one({'email': current_user})
-    if found_account:
-        if found_account["role"] == role['admin']:
+        found_user = userCollection.find_one({'email': current_user})
+    if found_user:
+        if found_user["role"] == role['admin']:
             try:
                 # Create new accounts
                 try:
@@ -155,7 +156,7 @@ def createAccount():
                     # Add message for debugging purpose
                     return e, 400
 
-                record_created = collection.insert(body)
+                record_created = accountCollection.insert(body)
 
                 return jsonify(str(record_created)), 201
             except:
@@ -179,7 +180,7 @@ def getAllAccount():
     if current_user:
         try:
             # Return all the records as query string parameters are not available
-            fetched_accounts = collection.find() \
+            fetched_accounts = accountCollection.find() \
                 .sort([("account_number", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING),
                        ("firstname", pymongo.ASCENDING), ("age", pymongo.ASCENDING)])
             if fetched_accounts.count > 0:
@@ -205,10 +206,10 @@ def getAccount(account_id):
         try:
             # Decode account_id
             account_id = unidecode.unidecode(account_id)
-            found_account = collection.find_one({'_id': ObjectId(account_id)})
-            if found_account:
+            found_user = accountCollection.find_one({'_id': ObjectId(account_id)})
+            if found_user:
                 # Prepare response if the accounts are found
-                return dumps(found_account), 200
+                return dumps(found_user), 200
             else:
                 return "Account not found", 404
 
@@ -226,9 +227,9 @@ def updateAccount(account_id):
        """
     current_user = get_jwt_identity()
     if current_user:
-        found_account = collection.find_one({'email': current_user})
-    if found_account:
-        if found_account["role"] ==  role['admin']:
+        found_user = userCollection.find_one({'email': current_user})
+    if found_user:
+        if found_user["role"] ==  role['admin']:
             try:
                 # Get the value which needs to be updated
                 try:
@@ -242,7 +243,7 @@ def updateAccount(account_id):
                 account_id = unidecode.unidecode(account_id)
 
                 # Updating the account
-                records_updated = collection.update_one({'_id': ObjectId(account_id)}, {"$set": body})
+                records_updated = accountCollection.update_one({'_id': ObjectId(account_id)}, {"$set": body})
 
                 # Check if resource is updated
                 if records_updated.modified_count > 0:
@@ -267,14 +268,14 @@ def deleteAccount(account_id):
        """
     current_user = get_jwt_identity()
     if current_user:
-        found_account = collection.find_one({'email': current_user})
-    if found_account:
-        if found_account["role"] == role['admin']:
+        found_user = userCollection.find_one({'email': current_user})
+    if found_user:
+        if found_user["role"] == role['admin']:
             try:
                 # Decode account_id
                 account_id = unidecode.unidecode(account_id)
                 # Delete the account
-                delete_account = collection.delete_one({'_id': ObjectId(account_id)})
+                delete_account = accountCollection.delete_one({'_id': ObjectId(account_id)})
 
                 if delete_account.deleted_count > 0:
                     # Prepare the response
@@ -295,9 +296,9 @@ def search():
         search_data = request.get_json()
         text = search_data["text"]
         page_num = search_data['page_num'] - 1
-        collection.drop_indexes()
-        collection.create_index([("$**", pymongo.TEXT)])
-        text_results = collection.find({"$text": {"$search": "\"" + text + "\""}}) \
+        accountCollection.drop_indexes()
+        accountCollection.create_index([("$**", pymongo.TEXT)])
+        text_results = accountCollection.find({"$text": {"$search": "\"" + text + "\""}}) \
             .sort([("email", pymongo.ASCENDING), ("firstname", pymongo.ASCENDING), ("lastname", pymongo.ASCENDING)]) \
             .limit(ITEM_PER_PAGE).skip(ITEM_PER_PAGE * page_num)
         return dumps(text_results)
