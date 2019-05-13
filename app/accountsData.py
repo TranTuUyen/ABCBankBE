@@ -35,7 +35,6 @@ accountCollection = db.account
 userCollection = db.user
 blacklist = set()
 
-
 @app.route('/api/v1/login', methods=['POST'])
 def login():
     try:
@@ -50,7 +49,6 @@ def login():
         user = userCollection.find_one({'email': email})
         if not user:
             return jsonify({'ok': False, 'message': "Account does not exist"}), 400
-        # userpw_hash = flask_bcrypt.generate_password_hash(user['password']).decode('utf-8')
         pw_match = flask_bcrypt.check_password_hash(user['password'], password)
         if not pw_match:
             return jsonify({'ok': False, 'message': "Password is wrong"}), 400
@@ -89,7 +87,7 @@ def logout():
 
 @app.route("/api/v1/accounts/check_account_number", methods=['POST'])
 @jwt_required
-def checkExistedAccountNumber():
+def check_existed_account_number():
     """
        Function to check existed account_number
        """
